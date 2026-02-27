@@ -1,3 +1,9 @@
 *.o
 output
 *~
+.comate/
+*.7z
+*.log
+build/
+*.tmp
+*.gz
