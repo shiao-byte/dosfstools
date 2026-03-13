@@ -36,6 +36,13 @@
 #include "fat.h"
 
 #define CLUSTER_MAX   (600000)  //保证内存允许的情况下的最大cluster的数量
+
+/*
+ * FAT_LAZY_LOAD 宏在 fsck.fat.h 中定义，可在该文件中统一开启或关闭。
+ * 开启后，FAT32 大容量卡（簇数 > CLUSTER_MAX）改用单窗口懒加载模式，
+ * 节省约 4.8MB FAT 缓冲内存；关闭后所有路径与原始实现完全相同。
+ */
+
 static int read_fat_mode = 0;
 
 /**
@@ -68,6 +75,31 @@ void get_fat(FAT_ENTRY * entry, void *fat, uint32_t cluster, DOS_FS * fs)
 	/* According to M$, the high 4 bits of a FAT32 entry are reserved and
 	 * are not part of the cluster number. So we cut them off. */
 	{
+#ifdef FAT_LAZY_LOAD
+	    /* 若当前处于懒加载模式且访问的是 fs->fat 窗口缓冲，
+	     * 则在读取前检查 cluster 是否在窗口内，超出则换入对应段。
+	     * 注意：传入非 fs->fat 的临时缓冲（如双FAT比较时）不走此分支。*/
+	    if (fat == (void *)fs->fat && fs->fat_lazy) {
+		if (cluster < fs->fat_win_start ||
+		    cluster >= fs->fat_win_start + CLUSTER_MAX) {
+		    uint32_t new_start = (cluster / CLUSTER_MAX) * CLUSTER_MAX;
+		    uint32_t cnt = fs->data_clusters + 2 - new_start;
+		    if (cnt > CLUSTER_MAX)
+			cnt = CLUSTER_MAX;
+		    /* fs_read 会自动合并 changes 队列，无需手动写回旧窗口 */
+		    fs_read(fs->fat_start + (off_t)new_start * 4,
+			   (int)(cnt * 4), fs->fat);
+		    fs->fat_win_start = new_start;
+		}
+		{
+		    uint32_t e = le32toh(
+			((unsigned int *)fat)[cluster - fs->fat_win_start]);
+		    entry->value = e & 0xfffffff;
+		    entry->reserved = e >> 28;
+		}
+		break;
+	    }
+#endif /* FAT_LAZY_LOAD */
 	    uint32_t e = le32toh(((unsigned int *)fat)[cluster]);
 	    entry->value = e & 0xfffffff;
 	    entry->reserved = e >> 28;
@@ -121,10 +153,169 @@ void read_fat(DOS_FS * fs)
     {
         if (total_num_clusters > CLUSTER_MAX)
         {
-            printf("clusters:%d it more than CLUSTER_MAX, exit\n", total_num_clusters);
-            exit(0);
+#ifdef FAT_LAZY_LOAD
+            /* FAT_LAZY_LOAD 开启时，FAT32 大卡走懒加载路径而非直接退出 */
+            if (fs->fat_bits != 32)
+#endif /* FAT_LAZY_LOAD */
+            {
+                printf("clusters:%d it more than CLUSTER_MAX, exit\n", total_num_clusters);
+                exit(0);
+            }
         }
     }
+
+#ifdef FAT_LAZY_LOAD
+    /*
+     * FAT32 大容量卡懒加载路径：
+     * 仅当 fat_bits==32 且簇数超过 CLUSTER_MAX（如 64G 及以上）时触发。
+     * fs->fat 只保留单个 CLUSTER_MAX 大小的滑动窗口，按需换入。
+     * 64G 以下的卡（簇数 <= CLUSTER_MAX）不进入此分支，行为与原始完全相同。
+     */
+    if (fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
+	uint32_t seg, cnt;
+	void *seg_buf = NULL;
+	int differ = 0;
+
+	printf("total_num_clusters:%u > CLUSTER_MAX, using lazy FAT window load\n",
+	       total_num_clusters);
+
+	/* 只分配单窗口缓冲区：CLUSTER_MAX 个 FAT32 表项 = 约 2.4MB */
+	alloc_size = CLUSTER_MAX * 4;
+	first = alloc(alloc_size);
+
+	if (fs->nfats > 1) {
+	    FAT_ENTRY first_media, second_media;
+
+	    seg_buf = alloc(alloc_size);
+	    first_ok = second_ok = 1;
+
+	    /* --- 分段比较双 FAT --- */
+	    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+		cnt = total_num_clusters - seg;
+		if (cnt > (uint32_t)CLUSTER_MAX)
+		    cnt = CLUSTER_MAX;
+		fs_read(fs->fat_start + (off_t)seg * 4,
+			(int)(cnt * 4), first);
+		fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+			(int)(cnt * 4), seg_buf);
+		if (seg == 0) {
+		    /* 媒体字节仅在第一段检查（含 FAT 类型标记） */
+		    get_fat(&first_media, first, 0, fs);
+		    get_fat(&second_media, seg_buf, 0, fs);
+		    first_ok = (first_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
+		    second_ok = (second_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
+		}
+		if (memcmp(first, seg_buf, cnt * 4) != 0)
+		    differ = 1;
+	    }
+
+	    /* --- 处理双 FAT 差异（逻辑同原始，改为逐段写入） --- */
+	    if (differ) {
+		if (first_ok && !second_ok) {
+		    printf("FATs differ - using first FAT.\n");
+		    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			cnt = total_num_clusters - seg;
+			if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			fs_read(fs->fat_start + (off_t)seg * 4,
+				(int)(cnt * 4), first);
+			fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+				 (int)(cnt * 4), first);
+		    }
+		}
+		if (!first_ok && second_ok) {
+		    printf("FATs differ - using second FAT.\n");
+		    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			cnt = total_num_clusters - seg;
+			if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+				(int)(cnt * 4), seg_buf);
+			fs_write(fs->fat_start + (off_t)seg * 4,
+				 (int)(cnt * 4), seg_buf);
+		    }
+		}
+		if (first_ok && second_ok) {
+		    if (interactive) {
+			printf("FATs differ but appear to be intact. Use which FAT ?\n"
+			       "1) Use first FAT\n2) Use second FAT\n");
+			if (get_key("12", "?") == '1') {
+			    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+				cnt = total_num_clusters - seg;
+				if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+				fs_read(fs->fat_start + (off_t)seg * 4,
+					(int)(cnt * 4), first);
+				fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+					 (int)(cnt * 4), first);
+			    }
+			} else {
+			    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+				cnt = total_num_clusters - seg;
+				if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+				fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+					(int)(cnt * 4), seg_buf);
+				fs_write(fs->fat_start + (off_t)seg * 4,
+					 (int)(cnt * 4), seg_buf);
+			    }
+			}
+		    } else {
+			printf("FATs differ but appear to be intact. Using first "
+			       "FAT.\n");
+			for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			    cnt = total_num_clusters - seg;
+			    if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			    fs_read(fs->fat_start + (off_t)seg * 4,
+				    (int)(cnt * 4), first);
+			    fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4,
+				     (int)(cnt * 4), first);
+			}
+		    }
+		}
+		if (!first_ok && !second_ok) {
+		    free(first);
+		    free(seg_buf);
+		    printf("Both FATs appear to be corrupt. Giving up.\n");
+		    exit(1);
+		}
+	    }
+	    free(seg_buf);
+	}
+
+	/* 加载第一个窗口到 fs->fat。
+	 * fs_read 会自动合并 changes 队列，若上面做了 FAT 修复写入，
+	 * 此处读取的数据已经反映了修复结果。*/
+	cnt = (total_num_clusters < (uint32_t)CLUSTER_MAX)
+	      ? total_num_clusters : (uint32_t)CLUSTER_MAX;
+	fs_read(fs->fat_start, (int)(cnt * 4), first);
+
+	fs->fat          = (unsigned char *)first;
+	fs->fat_win_start = 0;
+	fs->fat_lazy      = 1;
+
+	printf("total_num_clusters:%u, lazy alloc_size:%d\n",
+	       total_num_clusters, alloc_size);
+
+	fs->cluster_owner = alloc(total_num_clusters * sizeof(DOS_FILE *));
+	memset(fs->cluster_owner, 0, total_num_clusters * sizeof(DOS_FILE *));
+
+	/* 越界链修复循环：get_fat / set_fat 内部会自动换入所需窗口 */
+	for (i = 2; i < fs->data_clusters + 2; i++) {
+	    FAT_ENTRY curEntry;
+	    get_fat(&curEntry, fs->fat, i, fs);
+	    if (curEntry.value == 1) {
+		printf("Cluster %ld out of range (1). Setting to EOF.\n",
+		       (long)(i - 2));
+		set_fat(fs, i, -1);
+	    }
+	    if (curEntry.value >= fs->data_clusters + 2 &&
+		(curEntry.value < FAT_MIN_BAD(fs))) {
+		printf("Cluster %ld out of range (%ld > %ld). Setting to EOF.\n",
+		       (long)(i - 2), (long)curEntry.value,
+		       (long)(fs->data_clusters + 2 - 1));
+		set_fat(fs, i, -1);
+	    }
+	}
+	return;  /* 懒加载路径完成，跳过后续的全量加载逻辑 */
+    }
+#endif /* FAT_LAZY_LOAD */
         
     if (fs->fat_bits != 12)
 	    alloc_size = eff_size;
@@ -266,8 +457,16 @@ void set_fat(DOS_FS * fs, uint32_t cluster, int32_t new)
     case 32:
 	{
 	    FAT_ENTRY curEntry;
+	    /* get_fat 在懒加载模式下会自动将 cluster 所在段换入窗口 */
 	    get_fat(&curEntry, fs->fat, cluster, fs);
 
+#ifdef FAT_LAZY_LOAD
+	    /* 懒加载模式下：get_fat 已保证 cluster 在当前窗口内，
+	     * data 指针使用窗口内偏移，避免越界写 */
+	    if (fs->fat_lazy)
+		data = fs->fat + (cluster - fs->fat_win_start) * 4;
+	    else
+#endif /* FAT_LAZY_LOAD */
 	    data = fs->fat + cluster * 4;
 	    offs = fs->fat_start + cluster * 4;
 	    /* According to M$, the high 4 bits of a FAT32 entry are reserved and

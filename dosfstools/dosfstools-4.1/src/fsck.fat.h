@@ -40,6 +40,18 @@
 
 #define FAT_STATE_DIRTY 0x01
 
+/*
+ * FAT_LAZY_LOAD: FAT32 大容量卡单窗口懒加载开关（在此处统一控制）
+ *
+ * 定义此宏后，当 fat_bits==32 且簇数超过 CLUSTER_MAX 时（如 64G 及以上的卡），
+ * fs->fat 仅保留 CLUSTER_MAX 个簇大小的滑动窗口缓冲区，按需换入磁盘数据，
+ * 显著降低内存占用（由全量 ~7MB 降至单窗口 ~2.4MB）。
+ *
+ * 注释掉此宏可关闭所有懒加载修改，完全恢复到原始行为。
+ * 64G 以下（簇数 <= CLUSTER_MAX）的卡，无论此宏是否定义，行为均与原始完全相同。
+ */
+#define FAT_LAZY_LOAD
+
 /* ++roman: Use own definition of boot sector structure -- the kernel headers'
  * name for it is msdos_boot_sector in 2.0 and fat_boot_sector in 2.1 ... */
 struct boot_sector {
@@ -165,6 +177,10 @@ typedef struct {
     unsigned char *fat;
     DOS_FILE **cluster_owner;
     char *label;
+#ifdef FAT_LAZY_LOAD
+    uint32_t fat_win_start; /* lazy load: start cluster of current window */
+    int      fat_lazy;      /* lazy load mode active (FAT32 large card only) */
+#endif
 } DOS_FS;
 
 extern int interactive, rw, list, verbose, test, write_immed;
