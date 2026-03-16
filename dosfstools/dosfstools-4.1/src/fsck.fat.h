@@ -178,8 +178,9 @@ typedef struct {
     DOS_FILE **cluster_owner;
     char *label;
 #ifdef FAT_LAZY_LOAD
-    uint32_t fat_win_start; /* lazy load: start cluster of current window */
-    int      fat_lazy;      /* lazy load mode active (FAT32 large card only) */
+    uint32_t fat_win_start;  /* lazy load: start cluster of current window */
+    int      fat_lazy;       /* lazy load mode active (FAT32 large card only) */
+    int      fat_lazy_enable;/* runtime control: 0=disabled(default), 1=auto(-L) */
 #endif
 } DOS_FS;
 

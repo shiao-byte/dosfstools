@@ -154,8 +154,8 @@ void read_fat(DOS_FS * fs)
         if (total_num_clusters > CLUSTER_MAX)
         {
 #ifdef FAT_LAZY_LOAD
-            /* FAT_LAZY_LOAD 开启时，FAT32 大卡走懒加载路径而非直接退出 */
-            if (fs->fat_bits != 32)
+            /* FAT_LAZY_LOAD 开启且 -L 参数传入时，FAT32 大卡走懒加载路径而非直接退出 */
+            if (fs->fat_bits != 32 || fs->fat_lazy_enable == 0)
 #endif /* FAT_LAZY_LOAD */
             {
                 printf("clusters:%d it more than CLUSTER_MAX, exit\n", total_num_clusters);
@@ -167,17 +167,18 @@ void read_fat(DOS_FS * fs)
 #ifdef FAT_LAZY_LOAD
     /*
      * FAT32 大容量卡懒加载路径：
-     * 仅当 fat_bits==32 且簇数超过 CLUSTER_MAX（如 64G 及以上）时触发。
+     * - fat_lazy_enable == 0（默认）: 不启用，大卡直接 exit
+     * - fat_lazy_enable == 1（-L 参数）: 自动判断，仅当 fat_bits==32 且簇数 > CLUSTER_MAX 时启用
      * fs->fat 只保留单个 CLUSTER_MAX 大小的滑动窗口，按需换入。
      * 64G 以下的卡（簇数 <= CLUSTER_MAX）不进入此分支，行为与原始完全相同。
      */
-    if (fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
+    if (fs->fat_lazy_enable == 1 && fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
 	uint32_t seg, cnt;
 	void *seg_buf = NULL;
 	int differ = 0;
 
-	printf("total_num_clusters:%u > CLUSTER_MAX, using lazy FAT window load\n",
-	       total_num_clusters);
+	printf("FAT32 lazy-load enabled: clusters=%u, window=%d\n",
+	       total_num_clusters, CLUSTER_MAX);
 
 	/* 只分配单窗口缓冲区：CLUSTER_MAX 个 FAT32 表项 = 约 2.4MB */
 	alloc_size = CLUSTER_MAX * 4;

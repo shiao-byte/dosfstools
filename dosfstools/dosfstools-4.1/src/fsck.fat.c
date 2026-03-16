@@ -70,6 +70,9 @@ static void usage(char *name)
     fprintf(stderr, "  -V       perform a verification pass\n");
     fprintf(stderr, "  -w       write changes to disk immediately\n");
     fprintf(stderr, "  -y       same as -a, for compat with other *fsck\n");
+#ifdef FAT_LAZY_LOAD
+    fprintf(stderr, "  -L       enable FAT32 lazy-load mode (auto for large cards, save memory)\n");
+#endif
     exit(2);
 }
 
@@ -112,9 +115,17 @@ int main(int argc, char **argv)
     rw = interactive = 1;
     check_atari();
 
+#ifdef FAT_LAZY_LOAD
+    fs.fat_lazy_enable = 0;  /* default: disabled, use -L to enable auto mode */
+#endif
+
     /*增加s和o，s:fsck时判断cluster的数量，超过就不做fsck;
         o:异常的cluster回收 by lvqiao*/
+#ifdef FAT_LAZY_LOAD
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoL")) != -1)
+#else
     while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwyso")) != -1)
+#endif
 	switch (c) {
 	case 'A':		/* toggle Atari format */
 	    atari_format = !atari_format;
@@ -173,6 +184,11 @@ int main(int argc, char **argv)
 	    rw = 1;
 	    interactive = 0;
         break;
+#ifdef FAT_LAZY_LOAD
+	case 'L':
+	    fs.fat_lazy_enable = 1;  /* enable auto mode: FAT32 + large card */
+	    break;
+#endif
 	default:
 	    usage(argv[0]);
 	}
