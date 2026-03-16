@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # 任何命令失败立即退出，方便定位编译错误
 
 #############################################################################################################
 ### 使用SSC308工具链编译dosfstools补丁版
@@ -35,7 +36,7 @@ echo "步骤1: 清理旧编译产物"
 echo "================================================"
 rm -rf ${OUT_PATH}
 rm -rf libiconv/libiconv-1.16
-rm -rf dosfstools/dosfstools-4.1
+# 注意：不删除 dosfstools/dosfstools-4.1，保留用户的代码修改
 
 # 编译 libiconv
 echo ""
@@ -71,18 +72,22 @@ echo "步骤3: 编译 dosfstools (应用补丁)"
 echo "================================================"
 cd $pwd/dosfstools
 
-rm -rf dosfstools-4.1
 
-echo "解压原始源码..."
-tar -zxvf dosfstools-4.1.tar.gz
-
-echo "应用补丁..."
-cp -av dosfstools-4.1_patch/* dosfstools-4.1/
-echo "✅ 补丁已应用"
 
 cd dosfstools-4.1
 
+# 确保configure有执行权限
+chmod +x configure
+
+# 清理旧配置（重要：避免使用缓存的错误编译器路径）
+if [ -f Makefile ]; then
+    echo "清理旧配置文件..."
+    make distclean 2>/dev/null || true
+fi
+
 echo "配置 dosfstools..."
+# 注意：每次都重新 configure，确保 CFLAGS/LDFLAGS 指向当次重建的 libiconv 路径
+# （步骤1 每次都会删除 OUT_PATH，旧 Makefile 的路径可能失效）
 ./configure \
     --host=${HOST_TRIPLET} \
     --without-udev \
