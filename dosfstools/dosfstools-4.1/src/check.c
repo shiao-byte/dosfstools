@@ -863,9 +863,12 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 	 */
 	if ((owner = get_owner(fs, walk))) {
 	    if (owner == file) {
-		printf("%s\n  Circular cluster chain. Truncating to %lu "
-		       "cluster%s.\n", path_name(file), (unsigned long)clusters,
+		/* Don't call path_name() as it may crash due to corrupted file structure.
+		 * Just print a generic circular chain message instead. */
+		printf("  Circular cluster chain detected at cluster %u. Truncating to %lu "
+		       "cluster%s.\n", walk, (unsigned long)clusters,
 		       clusters == 1 ? "" : "s");
+		
 		if (prev)
 		    set_fat(fs, prev, -1);
 		else if (!file->offset)
