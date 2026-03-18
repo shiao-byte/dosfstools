@@ -122,11 +122,20 @@ off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int ge
 		    break;
 	    }
 	    if (clu_num == prev)
-		die("Root directory full and no free cluster");
-	    set_fat(fs, prev, clu_num);
-	    set_fat(fs, clu_num, -1);
+	    die("Root directory full and no free cluster");
+	set_fat(fs, prev, clu_num);
+	set_fat(fs, clu_num, -1);
+#ifdef CLUSTER_OWNER_BITMAP
+	if (fs->cluster_owner_mode == 1) {
+	    /* Bitmap mode: just mark the cluster as used */
+	    set_owner(fs, clu_num, (DOS_FILE *)1);
+	} else
+#endif
+	{
+	    /* Normal mode: copy owner from root cluster */
 	    set_owner(fs, clu_num, get_owner(fs, fs->root_cluster));
-	    /* clear new cluster */
+	}
+	/* clear new cluster */
 	    memset(&d2, 0, sizeof(d2));
 	    offset = cluster_start(fs, clu_num);
 	    for (i = 0; i < fs->cluster_size; i += sizeof(DIR_ENT))
@@ -600,6 +609,40 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	}
 	if ((owner = get_owner(fs, curr))) {
 	    int do_trunc = 0;
+#ifdef CLUSTER_OWNER_BITMAP
+	    /* In bitmap mode, owner is a dummy value, can't show file names */
+	    if (fs->cluster_owner_mode == 1) {
+		/* Debug: Show context */
+		printf("%s\n  uses cluster %u which is already in use.\n",
+		       path_name(file), curr);
+		printf("  Current position: cluster %lu/%lu, prev=%lu\n",
+		       (unsigned long)clusters, (unsigned long)curr, (unsigned long)prev);
+		
+		/* Critical fix: Cannot truncate root dir or when clusters==0 */
+		if (!file->offset) {
+		    printf("  ERROR: This is the root directory! Cannot truncate.\n");
+		    printf("  Possible causes:\n");
+		    printf("    1. Another file incorrectly uses root cluster %u\n", curr);
+		    printf("    2. Root directory has circular chain\n");
+		    printf("    3. Filesystem is severely corrupted\n");
+		    printf("  RECOMMENDATION: Use default mode (without -B) for accurate diagnosis.\n");
+		    return;  /* Don't truncate root dir */
+		}
+		if (clusters == 0) {
+		    printf("  ERROR: Cluster conflict at file start (clusters=0).\n");
+		    printf("  This means cluster %u is used by another file before this one.\n", curr);
+		    printf("  Cannot truncate to zero (would delete entire file).\n");
+		    printf("  SKIPPING this file - data may be corrupted.\n");
+		    return;
+		}
+		
+		printf("  Truncating file to %llu bytes.\n",
+		       (unsigned long long)clusters * fs->cluster_size);
+		truncate_file(fs, file, clusters);
+		return;
+	    }
+#endif
+	    /* Normal mode: can show both file names */
 	    printf("%s  and\n", path_name(owner));
 	    printf("%s\n  share clusters.\n", path_name(file));
 	    clusters2 = 0;
@@ -862,6 +905,26 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 	 * Cross-linking of clusters is handled in check_file()
 	 */
 	if ((owner = get_owner(fs, walk))) {
+#ifdef CLUSTER_OWNER_BITMAP
+	    /* In bitmap mode, we can't distinguish between circular chain
+	     * and cross-link since owner is just a dummy value (DOS_FILE *)1.
+	     * Treat any conflict as potential circular chain and truncate. */
+	    if (fs->cluster_owner_mode == 1) {
+		printf("  Cluster %u conflict detected (circular chain or cross-link). "
+		       "Truncating to %lu cluster%s.\n", 
+		       walk, (unsigned long)clusters,
+		       clusters == 1 ? "" : "s");
+		
+		if (prev)
+		    set_fat(fs, prev, -1);
+		else if (!file->offset)
+		    die("Bad FAT32 root directory! (bad start cluster)\n");
+		else
+		    MODIFY_START(file, 0, fs);
+		return;
+	    }
+#endif
+	    /* Normal mode: can check if owner == file to detect circular chain */
 	    if (owner == file) {
 		/* Don't call path_name() as it may crash due to corrupted file structure.
 		 * Just print a generic circular chain message instead. */

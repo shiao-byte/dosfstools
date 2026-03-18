@@ -109,6 +109,9 @@ int main(int argc, char **argv)
     DOS_FS fs;
     int salvage_files, verify, c;
     uint32_t free_clusters = 0;
+#if defined(CLUSTER_OWNER_BITMAP) && defined(CLUSTER_OWNER_SEGMENTED)
+    int bitmap_flag = 0, segmented_flag = 0;  /* Track -B and -S usage */
+#endif
 
     memset(&fs, 0, sizeof(fs));
     salvage_files = verify = 0;
@@ -121,8 +124,20 @@ int main(int argc, char **argv)
 
     /*增加s和o，s:fsck时判断cluster的数量，超过就不做fsck;
         o:异常的cluster回收 by lvqiao*/
-#ifdef FAT_LAZY_LOAD
+#if defined(FAT_LAZY_LOAD) && defined(CLUSTER_OWNER_BITMAP) && defined(CLUSTER_OWNER_SEGMENTED)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoLBS")) != -1)
+#elif defined(FAT_LAZY_LOAD) && defined(CLUSTER_OWNER_BITMAP)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoLB")) != -1)
+#elif defined(FAT_LAZY_LOAD) && defined(CLUSTER_OWNER_SEGMENTED)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoLS")) != -1)
+#elif defined(FAT_LAZY_LOAD)
     while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoL")) != -1)
+#elif defined(CLUSTER_OWNER_BITMAP) && defined(CLUSTER_OWNER_SEGMENTED)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoBS")) != -1)
+#elif defined(CLUSTER_OWNER_BITMAP)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoB")) != -1)
+#elif defined(CLUSTER_OWNER_SEGMENTED)
+    while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwysoS")) != -1)
 #else
     while ((c = getopt(argc, argv, "Aac:d:bflnprtu:vVwyso")) != -1)
 #endif
@@ -189,10 +204,34 @@ int main(int argc, char **argv)
 	    fs.fat_lazy_enable = 1;  /* enable auto mode: FAT32 + large card */
 	    break;
 #endif
+#ifdef CLUSTER_OWNER_BITMAP
+	case 'B':
+	    fs.cluster_owner_mode = 1;  /* enable bitmap mode */
+#if defined(CLUSTER_OWNER_SEGMENTED)
+	    bitmap_flag = 1;
+#endif
+	    printf("Cluster owner bitmap mode enabled (saves ~57MB on 256GB cards)\n");
+	    break;
+#endif
+#ifdef CLUSTER_OWNER_SEGMENTED
+	case 'S':
+	    fs.cluster_owner_mode = 2;  /* enable segmented mode */
+#if defined(CLUSTER_OWNER_BITMAP)
+	    segmented_flag = 1;
+#endif
+	    printf("Cluster owner segmented mode enabled (saves ~53MB on 256GB cards)\n");
+	    break;
+#endif
 	default:
 	    usage(argv[0]);
 	}
     set_dos_codepage(-1);	/* set default codepage if none was given in command line */
+#if defined(CLUSTER_OWNER_BITMAP) && defined(CLUSTER_OWNER_SEGMENTED)
+    if (bitmap_flag && segmented_flag) {
+	fprintf(stderr, "Error: -B (bitmap) and -S (segmented) cannot be used together\n");
+	exit(2);
+    }
+#endif
     if ((test || write_immed) && !rw) {
 	fprintf(stderr, "-t and -w can not be used in read only mode\n");
 	exit(2);

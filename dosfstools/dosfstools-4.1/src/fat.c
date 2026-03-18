@@ -294,8 +294,36 @@ void read_fat(DOS_FS * fs)
 	printf("total_num_clusters:%u, lazy alloc_size:%d\n",
 	       total_num_clusters, alloc_size);
 
-	fs->cluster_owner = alloc(total_num_clusters * sizeof(DOS_FILE *));
-	memset(fs->cluster_owner, 0, total_num_clusters * sizeof(DOS_FILE *));
+#ifdef CLUSTER_OWNER_BITMAP
+	if (fs->cluster_owner_mode == 1) {
+	    /* Bitmap mode: 1 bit per cluster */
+	    size_t bitmap_bytes = (total_num_clusters + 7) / 8;
+	    fs->cluster_bitmap = alloc(bitmap_bytes);
+	    memset(fs->cluster_bitmap, 0, bitmap_bytes);
+	    printf("Cluster owner bitmap allocated: %zu bytes (%.1f MB)\n",
+		   bitmap_bytes, (double)bitmap_bytes / (1024 * 1024));
+	} else
+#endif
+#ifdef CLUSTER_OWNER_SEGMENTED
+	if (fs->cluster_owner_mode == 2) {
+	    /* Segmented mode: only allocate CLUSTER_MAX window */
+	    uint32_t seg_size = CLUSTER_MAX;
+	    fs->cluster_owner = alloc(seg_size * sizeof(DOS_FILE *));
+	    memset(fs->cluster_owner, 0, seg_size * sizeof(DOS_FILE *));
+	    fs->owner_seg_start = 0;
+	    fs->owner_seg_clusters = (total_num_clusters < seg_size) ? 
+	                              total_num_clusters : seg_size;
+	    printf("Cluster owner segmented mode: window size=%u (%.1f MB), total=%u clusters\n",
+		   fs->owner_seg_clusters, 
+		   (double)(fs->owner_seg_clusters * sizeof(DOS_FILE *)) / (1024 * 1024),
+		   total_num_clusters);
+	} else
+#endif
+	{
+	    /* Normal mode: pointer array */
+	    fs->cluster_owner = alloc(total_num_clusters * sizeof(DOS_FILE *));
+	    memset(fs->cluster_owner, 0, total_num_clusters * sizeof(DOS_FILE *));
+	}
 
 	/* 越界链修复循环：get_fat / set_fat 内部会自动换入所需窗口 */
 	for (i = 2; i < fs->data_clusters + 2; i++) {
@@ -373,8 +401,36 @@ void read_fat(DOS_FS * fs)
     }
     fs->fat = (unsigned char *)first;
 
-    fs->cluster_owner = alloc(total_num_clusters * sizeof(DOS_FILE *));
-    memset(fs->cluster_owner, 0, (total_num_clusters * sizeof(DOS_FILE *)));
+#ifdef CLUSTER_OWNER_BITMAP
+    if (fs->cluster_owner_mode == 1) {
+	/* Bitmap mode: 1 bit per cluster */
+	size_t bitmap_bytes = (total_num_clusters + 7) / 8;
+	fs->cluster_bitmap = alloc(bitmap_bytes);
+	memset(fs->cluster_bitmap, 0, bitmap_bytes);
+	printf("Cluster owner bitmap allocated: %zu bytes (%.1f MB)\n",
+	       bitmap_bytes, (double)bitmap_bytes / (1024 * 1024));
+    } else
+#endif
+#ifdef CLUSTER_OWNER_SEGMENTED
+    if (fs->cluster_owner_mode == 2) {
+	/* Segmented mode: only allocate CLUSTER_MAX window */
+	uint32_t seg_size = CLUSTER_MAX;
+	fs->cluster_owner = alloc(seg_size * sizeof(DOS_FILE *));
+	memset(fs->cluster_owner, 0, seg_size * sizeof(DOS_FILE *));
+	fs->owner_seg_start = 0;
+	fs->owner_seg_clusters = (total_num_clusters < seg_size) ? 
+	                          total_num_clusters : seg_size;
+	printf("Cluster owner segmented mode: window size=%u (%.1f MB), total=%u clusters\n",
+	       fs->owner_seg_clusters, 
+	       (double)(fs->owner_seg_clusters * sizeof(DOS_FILE *)) / (1024 * 1024),
+	       total_num_clusters);
+    } else
+#endif
+    {
+	/* Normal mode: pointer array */
+	fs->cluster_owner = alloc(total_num_clusters * sizeof(DOS_FILE *));
+	memset(fs->cluster_owner, 0, (total_num_clusters * sizeof(DOS_FILE *)));
+    }
 
     /* Truncate any cluster chains that link to something out of range */
     for (i = 2; i < fs->data_clusters + 2; i++) {
@@ -533,6 +589,51 @@ off_t cluster_start(DOS_FS * fs, uint32_t cluster)
  */
 void set_owner(DOS_FS * fs, uint32_t cluster, DOS_FILE * owner)
 {
+#ifdef CLUSTER_OWNER_BITMAP
+    if (fs->cluster_owner_mode == 1) {
+	/* Bitmap mode: 1 bit per cluster */
+	if (fs->cluster_bitmap == NULL)
+	    die("Internal error: attempt to set owner in non-existent bitmap");
+	
+	uint32_t byte_idx = cluster / 8;
+	uint8_t  bit_mask = 1 << (cluster % 8);
+	
+	if (owner) {
+	    /* Check if already set (indicates conflict) */
+	    if (fs->cluster_bitmap[byte_idx] & bit_mask) {
+		die("Internal error: attempt to change file owner (bitmap conflict)");
+	    }
+	    fs->cluster_bitmap[byte_idx] |= bit_mask;  /* Set bit */
+	} else {
+	    fs->cluster_bitmap[byte_idx] &= ~bit_mask; /* Clear bit */
+	}
+	return;
+    }
+#endif
+
+#ifdef CLUSTER_OWNER_SEGMENTED
+    if (fs->cluster_owner_mode == 2) {
+	/* Segmented mode: only track current window */
+	if (fs->cluster_owner == NULL)
+	    die("Internal error: attempt to set owner in non-existent table");
+	
+	/* Check if cluster is within current segment */
+	if (cluster < fs->owner_seg_start || 
+	    cluster >= fs->owner_seg_start + fs->owner_seg_clusters) {
+	    /* Outside current window - skip for now (will be handled in next pass) */
+	    return;
+	}
+	
+	uint32_t seg_offset = cluster - fs->owner_seg_start;
+	if (owner && fs->cluster_owner[seg_offset]
+	    && (fs->cluster_owner[seg_offset] != owner))
+	    die("Internal error: attempt to change file owner (segmented)");
+	fs->cluster_owner[seg_offset] = owner;
+	return;
+    }
+#endif
+    
+    /* Normal mode: pointer array */
     if (fs->cluster_owner == NULL)
 	die("Internal error: attempt to set owner in non-existent table");
 
@@ -544,6 +645,42 @@ void set_owner(DOS_FS * fs, uint32_t cluster, DOS_FILE * owner)
 
 DOS_FILE *get_owner(DOS_FS * fs, uint32_t cluster)
 {
+#ifdef CLUSTER_OWNER_BITMAP
+    if (fs->cluster_owner_mode == 1) {
+	/* Bitmap mode: can only return "used" or "free" */
+	if (fs->cluster_bitmap == NULL)
+	    return NULL;
+	
+	uint32_t byte_idx = cluster / 8;
+	uint8_t  bit_mask = 1 << (cluster % 8);
+	
+	/* Return non-NULL if bit is set (cluster is used) */
+	if (fs->cluster_bitmap[byte_idx] & bit_mask)
+	    return (DOS_FILE *)1;  /* Non-NULL dummy value */
+	else
+	    return NULL;
+    }
+#endif
+
+#ifdef CLUSTER_OWNER_SEGMENTED
+    if (fs->cluster_owner_mode == 2) {
+	/* Segmented mode: only check current window */
+	if (fs->cluster_owner == NULL)
+	    return NULL;
+	
+	/* Check if cluster is within current segment */
+	if (cluster < fs->owner_seg_start || 
+	    cluster >= fs->owner_seg_start + fs->owner_seg_clusters) {
+	    /* Outside current window */
+	    return NULL;
+	}
+	
+	uint32_t seg_offset = cluster - fs->owner_seg_start;
+	return fs->cluster_owner[seg_offset];
+    }
+#endif
+    
+    /* Normal mode: return actual owner pointer */
     if (fs->cluster_owner == NULL)
 	return NULL;
     else
