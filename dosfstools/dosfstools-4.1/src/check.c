@@ -226,20 +226,38 @@ static char *path_name(DOS_FILE * file)
 {
     static char path[PATH_NAME_MAX * 2];
 
-    if (!file)
+    DEBUG_PRINT("[DEBUG path_name] entered with file=%p\n", (void*)file);
+
+    if (!file) {
+	DEBUG_PRINT("[DEBUG path_name] file is NULL (root), setting path to empty\n");
 	*path = 0;		/* Reached the root directory */
-    else {
-	if (strlen(path_name(file->parent)) > PATH_NAME_MAX)
+    } else {
+	DEBUG_PRINT("[DEBUG path_name] file is not NULL, recursing to parent=%p\n", (void*)file->parent);
+	if (strlen(path_name(file->parent)) > PATH_NAME_MAX) {
+	    DEBUG_PRINT("[ERROR path_name] path too long, calling die()\n");
 	    die("Path name too long.");
-	if (strcmp(path, "/") != 0)
+	}
+	DEBUG_PRINT("[DEBUG path_name] after recursion, path='%s'\n", path);
+	if (strcmp(path, "/") != 0) {
+	    DEBUG_PRINT("[DEBUG path_name] path is not '/', appending '/'\n");
 	    strcat(path, "/");
+	}
+	DEBUG_PRINT("[DEBUG path_name] after separator, path='%s'\n", path);
 
 	/* Append the long name to the path,
 	 * or the short name if there isn't a long one
 	 */
+	DEBUG_PRINT("[DEBUG path_name] file->lfn=%p, appending filename\n", (void*)file->lfn);
+	if (file->lfn) {
+	    DEBUG_PRINT("[DEBUG path_name] using long filename: '%s'\n", file->lfn);
+	} else {
+	    DEBUG_PRINT("[DEBUG path_name] no lfn, using short name from dir_ent.name\n");
+	}
 	strcpy(strrchr(path, 0),
 	       file->lfn ? file->lfn : file_name(file->dir_ent.name));
+	DEBUG_PRINT("[DEBUG path_name] filename appended, final path='%s'\n", path);
     }
+    DEBUG_PRINT("[DEBUG path_name] returning path='%s'\n", path);
     return path;
 }
 
@@ -523,7 +541,13 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
     int restart;
     uint32_t expect, curr, this, clusters, prev, walk, clusters2;
 
+    DEBUG_PRINT("[DEBUG] check_file: entered, file=%p, name=%.11s, attr=0x%02x\n",
+	   (void*)file, file->dir_ent.name, file->dir_ent.attr);
+    DEBUG_PRINT("[DEBUG] check_file: FSTART=%u, size=%u, parent=%p\n",
+	   FSTART(file, fs), le32toh(file->dir_ent.size), (void*)file->parent);
+
     if (file->dir_ent.attr & ATTR_DIR) {
+	DEBUG_PRINT("[DEBUG] check_file: this is a directory\n");
 	if (le32toh(file->dir_ent.size)) {
 	    printf("%s\n  Directory has non-zero size. Fixing it.\n",
 		   path_name(file));
@@ -561,6 +585,8 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	    return 0;
 	}
     }
+    DEBUG_PRINT("[DEBUG] check_file: passed directory checks, checking start cluster\n");
+    
     if (FSTART(file, fs) == 1) {
 	printf("%s\n  Bad start cluster 1. Truncating file.\n",
 	       path_name(file));
@@ -568,6 +594,8 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	    die("Bad FAT32 root directory! (bad start cluster 1)\n");
 	MODIFY_START(file, 0, fs);
     }
+    DEBUG_PRINT("[DEBUG] check_file: checking if start cluster beyond limit\n");
+    
     if (FSTART(file, fs) >= fs->data_clusters + 2) {
 	printf
 	    ("%s\n  Start cluster beyond limit (%lu > %lu). Truncating file.\n",
@@ -579,11 +607,17 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 		(unsigned long)(fs->data_clusters + 1));
 	MODIFY_START(file, 0, fs);
     }
+    DEBUG_PRINT("[DEBUG] check_file: entering cluster chain loop, FSTART=%u\n", FSTART(file, fs));
+    
     clusters = prev = 0;
     for (curr = FSTART(file, fs) ? FSTART(file, fs) :
 	 -1; curr != -1; curr = next_cluster(fs, curr)) {
+	DEBUG_PRINT("[DEBUG] check_file: loop iteration, curr=%u, clusters=%u\n", curr, clusters);
+	
 	FAT_ENTRY curEntry;
 	get_fat(&curEntry, fs->fat, curr, fs);
+
+	DEBUG_PRINT("[DEBUG] check_file: got FAT entry, value=%u\n", curEntry.value);
 
 	if (!curEntry.value || bad_cluster(fs, curr)) {
 	    printf("%s\n  Contains a %s cluster (%lu). Assuming EOF.\n",
@@ -607,7 +641,10 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	    truncate_file(fs, file, clusters);
 	    break;
 	}
+	DEBUG_PRINT("[DEBUG] check_file: calling get_owner(%u)\n", curr);
+	
 	if ((owner = get_owner(fs, curr))) {
+	    DEBUG_PRINT("[DEBUG] check_file: get_owner returned %p (cluster is owned)\n", (void*)owner);
 	    int do_trunc = 0;
 #ifdef CLUSTER_OWNER_BITMAP
 	    /* In bitmap mode, owner is a dummy value, can't show file names */
@@ -643,7 +680,7 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	    }
 #endif
 	    /* Normal mode: can show both file names */
-	    printf("%s  and\n", path_name(owner));
+		printf("%s  and\n", path_name(owner));
 	    printf("%s\n  share clusters.\n", path_name(file));
 	    clusters2 = 0;
 	    for (walk = FSTART(owner, fs); walk > 0 && walk != -1; walk =
@@ -710,7 +747,9 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 		break;
 	    }
 	}
+	DEBUG_PRINT("[DEBUG] check_file: calling set_owner(%u, %p)\n", curr, (void*)file);
 	set_owner(fs, curr, file);
+	DEBUG_PRINT("[DEBUG] check_file: set_owner completed\n");
 	clusters++;
 	prev = curr;
     }
@@ -730,11 +769,17 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 
 static int check_files(DOS_FS * fs, DOS_FILE * start)
 {
+    DEBUG_PRINT("[DEBUG] check_files: entered, start=%p\n", (void*)start);
+    
     while (start) {
+	DEBUG_PRINT("[DEBUG] check_files: checking file at %p, name=%.11s, attr=0x%02x\n",
+	       (void*)start, start->dir_ent.name, start->dir_ent.attr);
 	if (check_file(fs, start))
 	    return 1;
+	DEBUG_PRINT("[DEBUG] check_files: file checked, moving to next\n");
 	start = start->next;
     }
+    DEBUG_PRINT("[DEBUG] check_files: completed\n");
     return 0;
 }
 
@@ -895,9 +940,13 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
     DOS_FILE *owner;
     uint32_t walk, prev, clusters, next_clu;
 
+    DEBUG_PRINT("[DEBUG] test_file: file=%p, FSTART(file)=%u\n", 
+	   (void*)file, FSTART(file, fs));
+    
     prev = clusters = 0;
     for (walk = FSTART(file, fs); walk > 1 && walk < fs->data_clusters + 2;
 	 walk = next_clu) {
+	DEBUG_PRINT("[DEBUG] test_file: walk=%u, clusters=%u\n", walk, clusters);
 	next_clu = next_cluster(fs, walk);
 
 	/* In this stage we are checking only for a loop within our own
@@ -1032,6 +1081,8 @@ static void add_file(DOS_FS * fs, DOS_FILE *** chain, DOS_FILE * parent,
     DIR_ENT de;
     FD_TYPE type;
 
+    DEBUG_PRINT("[DEBUG] add_file: offset=%ld, parent=%p\n", (long)offset, (void*)parent);
+    
     if (offset)
 	fs_read(offset, sizeof(DIR_ENT), &de);
     else {
@@ -1042,6 +1093,9 @@ static void add_file(DOS_FS * fs, DOS_FILE *** chain, DOS_FILE * parent,
 	de.start = htole16(fs->root_cluster & 0xffff);
 	de.starthi = htole16((fs->root_cluster >> 16) & 0xffff);
     }
+    DEBUG_PRINT("[DEBUG] add_file: de.attr=0x%02x, de.start=%u\n", de.attr, 
+	   le16toh(de.start) | (le16toh(de.starthi) << 16));
+    
     if ((type = file_type(cp, (char *)de.name)) != fdt_none) {
 	if (type == fdt_undelete && (de.attr & ATTR_DIR))
 	    die("Can't undelete directories.");
@@ -1057,6 +1111,7 @@ static void add_file(DOS_FS * fs, DOS_FILE *** chain, DOS_FILE * parent,
 	return;
     }
     new = qalloc(&mem_queue, sizeof(DOS_FILE));
+    DEBUG_PRINT("[DEBUG] add_file: allocated new DOS_FILE at %p\n", (void*)new);
     new->lfn = lfn_get(&de, &new->lfn_offset);
     new->offset = offset;
     memcpy(&new->dir_ent, &de, sizeof(de));
@@ -1077,7 +1132,9 @@ static void add_file(DOS_FS * fs, DOS_FILE *** chain, DOS_FILE * parent,
 	strncmp((const char *)de.name, MSDOS_DOT, MSDOS_NAME) != 0 &&
 	strncmp((const char *)de.name, MSDOS_DOTDOT, MSDOS_NAME) != 0)
 	++n_files;
+    DEBUG_PRINT("[DEBUG] add_file: calling test_file()\n");
     test_file(fs, new, test);	/* Bad cluster check */
+    DEBUG_PRINT("[DEBUG] add_file: test_file() returned\n");
 }
 
 static int subdirs(DOS_FS * fs, DOS_FILE * parent, FDSC ** cp);
@@ -1088,6 +1145,10 @@ static int scan_dir(DOS_FS * fs, DOS_FILE * this, FDSC ** cp)
     int i;
     uint32_t clu_num;
 
+    DEBUG_PRINT("[DEBUG] scan_dir() entered, dir name=%.11s, start_cluster=%u\n", 
+	   this->dir_ent.name, FSTART(this, fs));
+    DEBUG_PRINT("[DEBUG] scan_dir: cluster_size=%u bytes\n", fs->cluster_size);
+    
     chain = &this->first;
     i = 0;
     clu_num = FSTART(this, fs);
@@ -1099,12 +1160,15 @@ static int scan_dir(DOS_FS * fs, DOS_FILE * this, FDSC ** cp)
 	if (!(i % fs->cluster_size))
 	    if ((clu_num = next_cluster(fs, clu_num)) == 0 || clu_num == -1)
 		break;
-    }
+	    }
     lfn_check_orphaned();
+    DEBUG_PRINT("[DEBUG] scan_dir: lfn_check done, calling check_dir()\n");
     if (check_dir(fs, &this->first, this->offset))
 	return 0;
+    DEBUG_PRINT("[DEBUG] scan_dir: check_dir done, calling check_files()\n");
     if (check_files(fs, this->first))
 	return 1;
+    DEBUG_PRINT("[DEBUG] scan_dir: check_files done, calling subdirs()\n");
     return subdirs(fs, this, cp);
 }
 
@@ -1145,9 +1209,20 @@ int scan_root(DOS_FS * fs)
     DOS_FILE **chain;
     int i;
 
+    DEBUG_PRINT("[DEBUG] scan_root() entered\n");
+    DEBUG_PRINT("[DEBUG] fs->root_cluster=%u, fs->root_entries=%u\n",
+	   fs->root_cluster, fs->root_entries);
+#ifdef CLUSTER_OWNER_SEGMENTED
+    if (fs->cluster_owner_mode == 2) {
+	DEBUG_PRINT("[DEBUG] Segmented mode: seg_start=%u, seg_clusters=%u, cluster_owner=%p\n",
+	       fs->owner_seg_start, fs->owner_seg_clusters, (void*)fs->cluster_owner);
+    }
+#endif
+
     root = NULL;
     chain = &root;
     new_dir();
+    DEBUG_PRINT("[DEBUG] About to add root files\n");
     if (fs->root_cluster) {
 	add_file(fs, &chain, NULL, 0, &fp_root);
     } else {
@@ -1155,9 +1230,13 @@ int scan_root(DOS_FS * fs)
 	    add_file(fs, &chain, NULL, fs->root_start + i * sizeof(DIR_ENT),
 		     &fp_root);
     }
+    DEBUG_PRINT("[DEBUG] root files added, checking lfn\n");
     lfn_check_orphaned();
+    DEBUG_PRINT("[DEBUG] about to check_dir(root)\n");
     (void)check_dir(fs, &root, 0);
+    DEBUG_PRINT("[DEBUG] check_dir completed, checking files\n");
     if (check_files(fs, root))
 	return 1;
+    DEBUG_PRINT("[DEBUG] about to scan subdirs\n");
     return subdirs(fs, NULL, &fp_root);
 }

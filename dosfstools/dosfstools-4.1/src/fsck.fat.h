@@ -76,6 +76,27 @@
  */
 #define CLUSTER_OWNER_SEGMENTED
 
+/*
+ * FSCK_DEBUG: 调试输出控制
+ *
+ * 定义此宏后，编译时会包含所有调试打印语句。用于排查段错误、内存访问等问题。
+ * 正常使用时应注释掉此宏以提高性能并减少输出噪音。
+ *
+ * 编译时启用调试：make CFLAGS="-DFSCK_DEBUG"
+ * 编译时禁用调试：正常 make（默认不定义此宏）
+ */
+/* #define FSCK_DEBUG */
+
+/* Debug output macros - only active when FSCK_DEBUG is defined */
+#ifdef FSCK_DEBUG
+    #define DEBUG_PRINT(fmt, ...) do { \
+        printf(fmt, ##__VA_ARGS__); \
+        fflush(stdout); \
+    } while(0)
+#else
+    #define DEBUG_PRINT(fmt, ...) do { } while(0)
+#endif
+
 /* ++roman: Use own definition of boot sector structure -- the kernel headers'
  * name for it is msdos_boot_sector in 2.0 and fat_boot_sector in 2.1 ... */
 struct boot_sector {
