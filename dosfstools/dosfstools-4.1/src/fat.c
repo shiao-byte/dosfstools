@@ -38,6 +38,16 @@
 #define CLUSTER_MAX   (600000)  //保证内存允许的情况下的最大cluster的数量
 
 /*
+ * total_num_clusters = data_clusters + 2（与 read_fat 中变量一致）。
+ * 不超过此值时视为约 64G 及以下：整表 FAT + 指针 owner 可接受，即使命令行带 -L/-B
+ * 也强制走原版逻辑，避免懒加载/位图引入额外问题。
+ *
+ * 参考：32G≈1946889 数据簇@16K；64G≈1908754@32K → 取 2_000_000 覆盖上界。
+ * 128G/256G 超过此值时才真正启用 -L / -B。
+ */
+#define FSCK_CLUSTER_OPTIMIZE_THRESHOLD  (2000000U)
+
+/*
  * FAT_LAZY_LOAD 宏在 fsck.fat.h 中定义，可在该文件中统一开启或关闭。
  * 开启后，FAT32 大容量卡（簇数 > CLUSTER_MAX）改用单窗口懒加载模式，
  * 节省约 4.8MB FAT 缓冲内存；关闭后所有路径与原始实现完全相同。
@@ -153,29 +163,41 @@ void read_fat(DOS_FS * fs)
     total_num_clusters = fs->data_clusters + 2;
     eff_size = (total_num_clusters * fs->fat_bits + 7) / 8ULL;
 
-    /*read_fat_mode为真时，判断total_num_clusters，防止cluster过大导致内存不足引起segmentfault, by lvqiao*/
-    if (read_fat_mode)
-    {
-        if (total_num_clusters > CLUSTER_MAX)
-        {
-#ifdef FAT_LAZY_LOAD
-            /* FAT_LAZY_LOAD 开启且 -L 参数传入时，FAT32 大卡走懒加载路径而非直接退出 */
-            if (fs->fat_bits != 32 || fs->fat_lazy_enable == 0)
-#endif /* FAT_LAZY_LOAD */
-            {
-                printf("clusters:%d it more than CLUSTER_MAX, exit\n", total_num_clusters);
-                exit(0);
-            }
-        }
+#if defined(FAT_LAZY_LOAD) || defined(CLUSTER_OWNER_BITMAP)
+    if (total_num_clusters <= FSCK_CLUSTER_OPTIMIZE_THRESHOLD) {
+# ifdef FAT_LAZY_LOAD
+	if (fs->fat_lazy_enable) {
+	    printf("Note: total clusters %u <= %u — ignoring -L, using full FAT.\n",
+		   (unsigned)total_num_clusters,
+		   (unsigned)FSCK_CLUSTER_OPTIMIZE_THRESHOLD);
+	    fs->fat_lazy_enable = 0;
+	}
+# endif
+# ifdef CLUSTER_OWNER_BITMAP
+	if (fs->cluster_owner_mode == 1) {
+	    printf("Note: total clusters %u <= %u — ignoring -B, using pointer cluster_owner.\n",
+		   (unsigned)total_num_clusters,
+		   (unsigned)FSCK_CLUSTER_OPTIMIZE_THRESHOLD);
+	    fs->cluster_owner_mode = 0;
+	}
+# endif
+    }
+#endif
+
+    /* -s（read_fat_mode）：仅比较总簇数与 FSCK_CLUSTER_OPTIMIZE_THRESHOLD，与 -L/-B/-S 无关 */
+    if (read_fat_mode && total_num_clusters > FSCK_CLUSTER_OPTIMIZE_THRESHOLD) {
+	printf("clusters:%u exceeds FSCK_CLUSTER_OPTIMIZE_THRESHOLD (%u), exit (-s).\n",
+	       (unsigned)total_num_clusters,
+	       (unsigned)FSCK_CLUSTER_OPTIMIZE_THRESHOLD);
+	exit(0);
     }
 
 #ifdef FAT_LAZY_LOAD
     /*
      * FAT32 大容量卡懒加载路径：
-     * - fat_lazy_enable == 0（默认）: 不启用，大卡直接 exit
-     * - fat_lazy_enable == 1（-L 参数）: 自动判断，仅当 fat_bits==32 且簇数 > CLUSTER_MAX 时启用
+     * - fat_lazy_enable == 0: 全表 FAT（小卷或已按阈值关闭 -L）
+     * - fat_lazy_enable == 1（-L）: 仅当 fat_bits==32 且簇数 > CLUSTER_MAX 时启用窗口
      * fs->fat 只保留单个 CLUSTER_MAX 大小的滑动窗口，按需换入。
-     * 64G 以下的卡（簇数 <= CLUSTER_MAX）不进入此分支，行为与原始完全相同。
      */
     if (fs->fat_lazy_enable == 1 && fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
 	uint32_t seg, cnt;
@@ -405,6 +427,9 @@ void read_fat(DOS_FS * fs)
 	free(second);
     }
     fs->fat = (unsigned char *)first;
+#ifdef FAT_LAZY_LOAD
+    fs->fat_lazy = 0;
+#endif
 
 #ifdef CLUSTER_OWNER_BITMAP
     if (fs->cluster_owner_mode == 1) {
