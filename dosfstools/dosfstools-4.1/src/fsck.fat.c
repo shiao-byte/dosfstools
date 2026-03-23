@@ -118,10 +118,6 @@ int main(int argc, char **argv)
     rw = interactive = 1;
     check_atari();
 
-#ifdef FAT_LAZY_LOAD
-    fs.fat_lazy_enable = 0;  /* default: disabled, use -L to enable auto mode */
-#endif
-
     /*增加s和o，s:fsck时判断cluster的数量，超过就不做fsck;
         o:异常的cluster回收 by lvqiao*/
 #if defined(FAT_LAZY_LOAD) && defined(CLUSTER_OWNER_BITMAP) && defined(CLUSTER_OWNER_SEGMENTED)
