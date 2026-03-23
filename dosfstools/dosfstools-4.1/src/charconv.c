@@ -35,9 +35,9 @@ static int init_conversion(int codepage)
 	    printf("Trying to set fallback DOS codepage %d\n",
 		   DEFAULT_DOS_CODEPAGE);
 	    dos_to_local = iconv_init_codepage(DEFAULT_DOS_CODEPAGE);
-	    if (dos_to_local == (iconv_t) - 1)
-		initialized = 0;	/* no conversion available */
 	}
+	if (dos_to_local == (iconv_t) - 1)
+	    initialized = 0;	/* no conversion available */
     }
     return initialized;
 }
