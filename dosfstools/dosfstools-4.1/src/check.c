@@ -942,6 +942,12 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
     uint32_t walk, prev, clusters, next_clu;
 #ifdef CLUSTER_OWNER_BITMAP
     uint32_t last_set = 0;  /* last cluster we set_owner'd, for bitmap revert */
+
+    if (fs->cluster_owner_mode == 1 && file->parent &&
+	(!strncmp((const char *)file->dir_ent.name, MSDOS_DOT, MSDOS_NAME) ||
+	 !strncmp((const char *)file->dir_ent.name, MSDOS_DOTDOT, MSDOS_NAME))) {
+	return;
+    }
 #endif
 
     DEBUG_PRINT("[DEBUG] test_file: file=%p, FSTART(file)=%u\n", 

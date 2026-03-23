@@ -142,6 +142,11 @@ void read_fat(DOS_FS * fs)
 	free(fs->fat);
     if (fs->cluster_owner)
 	free(fs->cluster_owner);
+#ifdef CLUSTER_OWNER_BITMAP
+    if (fs->cluster_bitmap)
+	free(fs->cluster_bitmap);
+    fs->cluster_bitmap = NULL;
+#endif
     fs->fat = NULL;
     fs->cluster_owner = NULL;
 
