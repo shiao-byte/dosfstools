@@ -783,6 +783,18 @@ void reclaim_file(DOS_FS * fs)
 	get_fat(&curEntry, fs->fat, i, fs);
 
 	next = curEntry.value;
+#ifdef CLUSTER_OWNER_BITMAP
+	/* In bitmap mode, record ALL unowned non-free non-bad clusters as
+	 * orphans BEFORE the inner if-block, because the inner block only
+	 * covers clusters with a valid forward link (next < data_clusters+2).
+	 * Clusters whose FAT value is EOC (0x0FFFFFFF) or another out-of-range
+	 * non-bad value are still orphans and must be captured here so that
+	 * is_orphan_head detection works correctly after tag_free().
+	 */
+	if (fs->cluster_owner_mode == 1 &&
+	    !get_owner(fs, i) && next && !FAT_IS_BAD(fs, next))
+	    WAS_ORPHAN_SET(i);
+#endif
 	if (!get_owner(fs, i) && next && next < fs->data_clusters + 2) {
 	    /* Cluster is linked, but not owned (orphan) */
 	    FAT_ENTRY nextEntry;
@@ -796,15 +808,6 @@ void reclaim_file(DOS_FS * fs)
 		set_fat(fs, i, -1);
 	    else
 		num_refs[next]++;
-#ifdef CLUSTER_OWNER_BITMAP
-	    /* Record that cluster i was orphaned at start of reclaim_file.
-	     * We need this later because after tag_free() sets the bitmap bit
-	     * for orphan clusters, get_owner() can no longer distinguish them
-	     * from file-owned clusters (both return non-zero).
-	     */
-	    if (fs->cluster_owner_mode == 1)
-		WAS_ORPHAN_SET(i);
-#endif
 	}
     }
 
