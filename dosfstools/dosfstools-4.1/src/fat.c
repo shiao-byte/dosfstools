@@ -35,17 +35,12 @@
 #include "check.h"
 #include "fat.h"
 
-#define CLUSTER_MAX   (600000)  //保证内存允许的情况下的最大cluster的数量
+#define CLUSTER_MAX   (3900000U)  //保证内存允许的情况下的最大cluster的数量
 
 /*
- * total_num_clusters = data_clusters + 2（与 read_fat 中变量一致）。
- * 不超过此值时视为约 64G 及以下：整表 FAT + 指针 owner 可接受，即使命令行带 -L/-B
- * 也强制走原版逻辑，避免懒加载/位图引入额外问题。
- *
- * 参考：32G≈1946889 数据簇@16K；64G≈1908754@32K → 取 2_000_000 覆盖上界。
- * 128G/256G 超过此值时才真正启用 -L / -B。
+ * 256G 超过此值时才真正启用 -L / -B。
  */
-#define FSCK_CLUSTER_OPTIMIZE_THRESHOLD  (2000000U)
+#define FSCK_CLUSTER_OPTIMIZE_THRESHOLD  (5700000U)
 
 /*
  * FAT_LAZY_LOAD 宏在 fsck.fat.h 中定义，可在该文件中统一开启或关闭。
