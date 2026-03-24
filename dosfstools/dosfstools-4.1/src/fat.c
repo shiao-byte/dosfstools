@@ -748,6 +748,18 @@ void reclaim_file(DOS_FS * fs)
     uint32_t i, next, walk;
     uint32_t *num_refs = NULL;	/* Only for orphaned clusters */
     uint32_t total_num_clusters;
+#ifdef CLUSTER_OWNER_BITMAP
+    /* In bitmap mode get_owner() cannot distinguish "owned by a real file"
+     * from "owned by &orphan" (both return non-zero).  We therefore keep a
+     * compact bitmap that remembers which clusters were unowned at the start
+     * of reclaim_file so that after tag_free() marks them we can still tell
+     * them apart from clusters that were file-owned all along.
+     * Memory cost: ceil(total_clusters / 8) bytes  (~950 KB for 7.6 M clusters)
+     */
+    uint8_t *was_orphan = NULL;
+#define WAS_ORPHAN_SET(idx)  (was_orphan[(idx) >> 3] |=  (1u << ((idx) & 7)))
+#define WAS_ORPHAN_GET(idx)  (was_orphan[(idx) >> 3] &   (1u << ((idx) & 7)))
+#endif
 
     if (verbose)
 	printf("Reclaiming unconnected clusters.\n");
@@ -755,6 +767,12 @@ void reclaim_file(DOS_FS * fs)
     total_num_clusters = fs->data_clusters + 2;
     num_refs = alloc(total_num_clusters * sizeof(uint32_t));
     memset(num_refs, 0, (total_num_clusters * sizeof(uint32_t)));
+#ifdef CLUSTER_OWNER_BITMAP
+    if (fs->cluster_owner_mode == 1) {
+	was_orphan = alloc((total_num_clusters + 7) / 8);
+	memset(was_orphan, 0, (total_num_clusters + 7) / 8);
+    }
+#endif
 
     /* Guarantee that all orphan chains (except cycles) end cleanly
      * with an end-of-chain mark.
@@ -778,81 +796,46 @@ void reclaim_file(DOS_FS * fs)
 		set_fat(fs, i, -1);
 	    else
 		num_refs[next]++;
+#ifdef CLUSTER_OWNER_BITMAP
+	    /* Record that cluster i was orphaned at start of reclaim_file.
+	     * We need this later because after tag_free() sets the bitmap bit
+	     * for orphan clusters, get_owner() can no longer distinguish them
+	     * from file-owned clusters (both return non-zero).
+	     */
+	    if (fs->cluster_owner_mode == 1)
+		WAS_ORPHAN_SET(i);
+#endif
 	}
     }
 
     /* Scan until all the orphans are accounted for,
      * and all cycles and cross-links are broken
      */
-#ifdef CLUSTER_OWNER_BITMAP
-    if (fs->cluster_owner_mode == 1) {
-	/* Bitmap mode: tag_free uses set_owner(walk, &orphan), but get_owner
-	 * returns (DOS_FILE*)1 instead of &orphan, so the pointer comparison
-	 * in the recovery loop would fail.  Instead we break cycles ourselves
-	 * and then identify orphan chain heads directly by their properties:
-	 *   - FAT entry is valid (not free, not bad)
-	 *   - Not owned by any known file (bit == 0)
-	 *   - num_refs == 0 (nothing else points to it, so it's a head)
-	 */
-	int any_cycle;
-	do {
-	    any_cycle = 0;
+    do {
+	tag_free(fs, &orphan, num_refs, changed);
+	changed = 0;
+
+	/* Any unaccounted-for orphans must be part of a cycle */
 	    for (i = 2; i < total_num_clusters; i++) {
 		FAT_ENTRY curEntry;
 		get_fat(&curEntry, fs->fat, i, fs);
 
+#ifdef CLUSTER_OWNER_BITMAP
 		if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
-		    !get_owner(fs, i)) {
-		    /* Part of an orphan cycle — break it */
+		!get_owner(fs, i) && curEntry.value < total_num_clusters) {
 		    if (!num_refs[curEntry.value]--)
 			die("Internal error: num_refs going below zero");
 		    set_fat(fs, i, -1);
-		    any_cycle = 1;
-		    printf("Broke cycle at cluster %lu in free chain.\n",
-			   (unsigned long)i);
+		changed = curEntry.value;
+		printf("Broke cycle at cluster %lu in free chain.\n", (unsigned long)i);
 
+		/* If we've created a new chain head,
+		 * tag_free() can claim it
+		 */
 		    if (num_refs[curEntry.value] == 0)
 			break;
 		}
-	    }
-	} while (any_cycle);
-
-	/* Now recover orphan chain heads */
-	files = reclaimed = 0;
-	for (i = 2; i < total_num_clusters; i++) {
-	    FAT_ENTRY curEntry;
-	    get_fat(&curEntry, fs->fat, i, fs);
-
-	    if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
-		!get_owner(fs, i) && !num_refs[i]) {
-		DIR_ENT de;
-		off_t offset;
-		files++;
-		offset = alloc_rootdir_entry(fs, &de, "FSCK%04dREC", 1);
-		de.start = htole16(i & 0xffff);
-		if (fs->fat_bits == 32)
-		    de.starthi = htole16(i >> 16);
-		for (walk = i; walk > 0 && walk != -1;
-		     walk = next_cluster(fs, walk)) {
-		    de.size = htole32(le32toh(de.size) + fs->cluster_size);
-		    set_owner(fs, walk, &orphan); /* mark as owned in bitmap */
-		    reclaimed++;
-		}
-		fs_write(offset, sizeof(DIR_ENT), &de);
-	    }
-	}
-    } else
-#endif
-    {
-	do {
-	    tag_free(fs, &orphan, num_refs, changed);
-	    changed = 0;
-
-	    /* Any unaccounted-for orphans must be part of a cycle */
-	    for (i = 2; i < total_num_clusters; i++) {
-		FAT_ENTRY curEntry;
-		get_fat(&curEntry, fs->fat, i, fs);
-
+else
 		if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
 		    !get_owner(fs, i)) {
 		    if (!num_refs[curEntry.value]--)
@@ -867,15 +850,29 @@ void reclaim_file(DOS_FS * fs)
 		    if (num_refs[curEntry.value] == 0)
 			break;
 		}
+#endif
 	    }
 	}
 	while (changed);
 
 	/* Now we can start recovery */
 	files = reclaimed = 0;
-	for (i = 2; i < total_num_clusters; i++)
-	    /* If this cluster is the head of an orphan chain... */
-	    if (get_owner(fs, i) == &orphan && !num_refs[i]) {
+    for (i = 2; i < total_num_clusters; i++) {
+#ifdef CLUSTER_OWNER_BITMAP
+	/* Bitmap mode: get_owner() returns (DOS_FILE*)1 for ANY owned cluster,
+	 * not just those marked by tag_free() with &orphan.  We disambiguate
+	 * using was_orphan[]: a cluster is an orphan chain head iff
+	 *   (a) it was unowned at the start of reclaim_file (was_orphan bit set)
+	 *   (b) tag_free() has now claimed it (get_owner returns non-zero)
+	 *   (c) no other orphan cluster points to it (num_refs[i] == 0, head)
+	 */
+	int is_orphan_head = (fs->cluster_owner_mode == 1)
+	    ? (WAS_ORPHAN_GET(i) && get_owner(fs, i) && !num_refs[i])
+	    : (get_owner(fs, i) == &orphan && !num_refs[i]);
+#else
+	int is_orphan_head = (get_owner(fs, i) == &orphan && !num_refs[i]);
+#endif
+	if (is_orphan_head) {
 		DIR_ENT de;
 		off_t offset;
 		files++;
@@ -898,6 +895,10 @@ void reclaim_file(DOS_FS * fs)
 	       files == 1 ? "" : "s");
 
     free(num_refs);
+#ifdef CLUSTER_OWNER_BITMAP
+    if (was_orphan)
+	free(was_orphan);
+#endif
 }
 
 uint32_t update_free(DOS_FS * fs)
