@@ -1238,12 +1238,6 @@ int scan_root(DOS_FS * fs)
     DEBUG_PRINT("[DEBUG] scan_root() entered\n");
     DEBUG_PRINT("[DEBUG] fs->root_cluster=%u, fs->root_entries=%u\n",
 	   fs->root_cluster, fs->root_entries);
-#ifdef CLUSTER_OWNER_SEGMENTED
-    if (fs->cluster_owner_mode == 2) {
-	DEBUG_PRINT("[DEBUG] Segmented mode: seg_start=%u, seg_clusters=%u, cluster_owner=%p\n",
-	       fs->owner_seg_start, fs->owner_seg_clusters, (void*)fs->cluster_owner);
-    }
-#endif
 
     root = NULL;
     chain = &root;

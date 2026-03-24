@@ -65,18 +65,6 @@
 #define CLUSTER_OWNER_BITMAP
 
 /*
- * CLUSTER_OWNER_SEGMENTED: cluster_owner 分段检查方案
- *
- * 定义此宏后，可通过运行时参数 -S 启用分段模式，将 cluster_owner 分段加载，
- * 每次只保留 CLUSTER_MAX 个簇的窗口，256GB卡从 58.2MB 降至 4.6MB，节省 53.6MB。
- *
- * 优势：保留完整诊断能力（文件名、交叉链接、循环链检测）。
- * 代价：需要多次扫描文件系统（256GB卡约13轮），耗时增加但可接受（修复工具非性能敏感）。
- * 不添加 -S 参数则使用原始 cluster_owner 指针数组。
- */
-#define CLUSTER_OWNER_SEGMENTED
-
-/*
  * FSCK_DEBUG: 调试输出控制
  *
  * 定义此宏后，编译时会包含所有调试打印语句。用于排查段错误、内存访问等问题。
@@ -227,16 +215,11 @@ typedef struct {
     int      fat_lazy;       /* lazy load mode active (FAT32 large card only) */
     int      fat_lazy_enable;/* runtime control: 0=disabled(default), 1=auto(-L) */
 #endif
-#if defined(CLUSTER_OWNER_BITMAP) || defined(CLUSTER_OWNER_SEGMENTED)
-    int cluster_owner_mode;  /* 0=normal(default), 1=bitmap(-B), 2=segmented(-S) */
-#endif
 #ifdef CLUSTER_OWNER_BITMAP
+    int cluster_owner_mode;  /* 0=normal(default), 1=bitmap(-B) */
     unsigned char *cluster_bitmap; /* bitmap mode: 1 bit per cluster */
 #endif
-#ifdef CLUSTER_OWNER_SEGMENTED
-    uint32_t owner_seg_start;   /* segmented mode: current segment start cluster */
-    uint32_t owner_seg_clusters; /* segmented mode: clusters in current segment */
-#endif
+
 } DOS_FS;
 
 extern int interactive, rw, list, verbose, test, write_immed;
