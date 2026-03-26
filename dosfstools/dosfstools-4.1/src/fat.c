@@ -889,9 +889,7 @@ void reclaim_file(DOS_FS * fs)
 	 */
 	int is_orphan_head = 0;
 	if (fs->cluster_owner_mode == 1) {
-	 is_orphan_head = (fs->cluster_owner_mode == 1)
-	    ? (WAS_ORPHAN_GET(i) && get_owner(fs, i) && !num_refs[i])
-	    : (get_owner(fs, i) == &orphan && !num_refs[i]);
+		is_orphan_head = (WAS_ORPHAN_GET(i) && get_owner(fs, i) && !num_refs[i]);
 	}
 	else {
 		 is_orphan_head = (get_owner(fs, i) == &orphan && !num_refs[i]);
