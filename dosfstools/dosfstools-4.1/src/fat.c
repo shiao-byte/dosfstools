@@ -824,6 +824,7 @@ void reclaim_file(DOS_FS * fs)
 		get_fat(&curEntry, fs->fat, i, fs);
 
 #ifdef CLUSTER_OWNER_BITMAP
+		if (fs->cluster_owner_mode == 1) {
 		if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
 		!get_owner(fs, i) && curEntry.value < total_num_clusters) {
 		    if (!num_refs[curEntry.value]--)
@@ -838,7 +839,24 @@ void reclaim_file(DOS_FS * fs)
 		    if (num_refs[curEntry.value] == 0)
 			break;
 		}
-else
+		}
+		else {
+			if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
+		    !get_owner(fs, i)) {
+		    if (!num_refs[curEntry.value]--)
+			die("Internal error: num_refs going below zero");
+		    set_fat(fs, i, -1);
+		    changed = curEntry.value;
+		    printf("Broke cycle at cluster %lu in free chain.\n", (unsigned long)i);
+
+		    /* If we've created a new chain head,
+		     * tag_free() can claim it
+		     */
+		    if (num_refs[curEntry.value] == 0)
+			break;
+		}
+		}
+#else
 		if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
 		    !get_owner(fs, i)) {
 		    if (!num_refs[curEntry.value]--)
@@ -869,9 +887,15 @@ else
 	 *   (b) tag_free() has now claimed it (get_owner returns non-zero)
 	 *   (c) no other orphan cluster points to it (num_refs[i] == 0, head)
 	 */
-	int is_orphan_head = (fs->cluster_owner_mode == 1)
+	int is_orphan_head = 0;
+	if (fs->cluster_owner_mode == 1) {
+	 is_orphan_head = (fs->cluster_owner_mode == 1)
 	    ? (WAS_ORPHAN_GET(i) && get_owner(fs, i) && !num_refs[i])
 	    : (get_owner(fs, i) == &orphan && !num_refs[i]);
+	}
+	else {
+		 is_orphan_head = (get_owner(fs, i) == &orphan && !num_refs[i]);
+	}
 #else
 	int is_orphan_head = (get_owner(fs, i) == &orphan && !num_refs[i]);
 #endif
@@ -899,8 +923,10 @@ else
 
     free(num_refs);
 #ifdef CLUSTER_OWNER_BITMAP
+	if (fs->cluster_owner_mode == 1) {
     if (was_orphan)
 	free(was_orphan);
+  }
 #endif
 }
 
