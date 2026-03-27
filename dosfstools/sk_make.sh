@@ -22,7 +22,7 @@ fi
     LDFLAGS=-L${OUT_PATH}/libiconv/lib \
     LIBS=-liconv
 
-find . \( -name 'Makefile.in' -o -name '.m4aclocal' -o -name 'configure' \) -exec touch {} \;
+find . \( -name 'Makefile.in' -o -name 'aclocal.m4' -o -name 'configure' \) -exec touch {} \;
 
 make
 
