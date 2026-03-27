@@ -7,3 +7,21 @@ output
 build/
 *.tmp
 *.gz
+# --- 编译 / Autotools 生成物 ---
+# configure/make 生成的文件
+**/Makefile
+**/config.status
+**/config.cache
+**/config.log
+**/autom4te.cache/
+# 编译依赖与 stamp
+**/.deps/
+**/.dirstamp
+# 编译产出可执行文件
+**/fsck.fat
+**/fatlabel
+**/mkfs.fat
+**/testdevinfo
+# 第三方库和编译输出目录
+libiconv/libiconv-1.16/
+thridlib_out/
