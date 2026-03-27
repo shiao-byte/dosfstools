@@ -26,7 +26,7 @@ find . \( -name 'Makefile.in' -o -name 'aclocal.m4' -o -name 'configure' \) -exe
 
 make
 
-
+${CROSS_PREFIX}strip src/fsck.fat src/mkfs.fat
 
 rm -rf ${OUT_PATH}/dosfstools/bin
 
