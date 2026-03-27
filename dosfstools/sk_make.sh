@@ -18,9 +18,7 @@ fi
     CC=${CROSS_PREFIX}gcc \
     --host=${HOST_TRIPLET} \
     --without-udev \
-    CFLAGS="-I${OUT_PATH}/libiconv/include ${CFLAGS}" \
-    LDFLAGS=-L${OUT_PATH}/libiconv/lib \
-    LIBS=-liconv
+    CFLAGS="${CFLAGS}"
 
 find . \( -name 'Makefile.in' -o -name 'aclocal.m4' -o -name 'configure' \) -exec touch {} \;
 
