@@ -126,7 +126,7 @@ off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int ge
 	set_fat(fs, prev, clu_num);
 	set_fat(fs, clu_num, -1);
 #ifdef CLUSTER_OWNER_BITMAP
-	if (fs->cluster_owner_mode == 1) {
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	    /* Bitmap mode: just mark the cluster as used */
 	    set_owner(fs, clu_num, (DOS_FILE *)1);
 	} else
@@ -653,7 +653,7 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	     * which file that is.
 	     * Exception: if file is the root directory, we must not truncate
 	     * it — skip this conflict and let it be handled otherwise. */
-	    if (fs->cluster_owner_mode == 1) {
+	    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 		if (!file->offset) {
 		    /* file is FAT32 root dir — cannot truncate it.
 		     * In normal mode we would truncate the other file (owner),
@@ -943,7 +943,7 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 #ifdef CLUSTER_OWNER_BITMAP
     uint32_t last_set = 0;  /* last cluster we set_owner'd, for bitmap revert */
 
-    if (fs->cluster_owner_mode == 1 && file->parent &&
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode && file->parent &&
 	(!strncmp((const char *)file->dir_ent.name, MSDOS_DOT, MSDOS_NAME) ||
 	 !strncmp((const char *)file->dir_ent.name, MSDOS_DOTDOT, MSDOS_NAME))) {
 	return;
@@ -969,7 +969,7 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 	     * and cross-link since owner is just a dummy value.
 	     * At this stage cross-links should already be resolved by check_file(),
 	     * so treat any remaining conflict as circular chain. */
-	    if (fs->cluster_owner_mode == 1) {
+	    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 		printf("  Circular cluster chain detected at cluster %u. "
 		       "Truncating to %lu cluster%s.\n", 
 		       walk, (unsigned long)clusters,
@@ -1022,7 +1022,7 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 	}
 	set_owner(fs, walk, file);
 #ifdef CLUSTER_OWNER_BITMAP
-	if (fs->cluster_owner_mode == 1)
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode)
 	    last_set = walk;
 #endif
     }
@@ -1032,7 +1032,7 @@ static void test_file(DOS_FS * fs, DOS_FILE * file, int read_test)
 	if (bad_cluster(fs, walk))
 	    break;
 #ifdef CLUSTER_OWNER_BITMAP
-	else if (fs->cluster_owner_mode == 1) {
+	else if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	    /* Bitmap mode: only revert clusters we actually set in the main loop above.
 	     * We tracked the last cluster set via last_set. Stop after clearing it so
 	     * we never touch marks that belong to other files. */

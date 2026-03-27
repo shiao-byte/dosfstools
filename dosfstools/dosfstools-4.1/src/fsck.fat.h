@@ -222,6 +222,10 @@ typedef struct {
 
 } DOS_FS;
 
+/* Named constants for runtime mode fields */
+#define FAT_LAZY_ENABLE_AUTO      1  /* fat_lazy_enable: -L flag is active */
+#define CLUSTER_OWNER_BITMAP_MODE 1  /* cluster_owner_mode: -B flag is active */
+
 extern int interactive, rw, list, verbose, test, write_immed;
 extern int atari_format;
 extern unsigned n_files;

@@ -186,12 +186,12 @@ int main(int argc, char **argv)
         break;
 #ifdef FAT_LAZY_LOAD
 	case 'L':
-	    fs.fat_lazy_enable = 1;  /* enable auto mode: FAT32 + large card */
+	    fs.fat_lazy_enable = FAT_LAZY_ENABLE_AUTO;  /* enable auto mode: FAT32 + large card */
 	    break;
 #endif
 #ifdef CLUSTER_OWNER_BITMAP
 	case 'B':
-	    fs.cluster_owner_mode = 1;  /* enable bitmap mode */
+	    fs.cluster_owner_mode = CLUSTER_OWNER_BITMAP_MODE;  /* enable bitmap mode */
 	    printf("Cluster owner bitmap mode enabled (saves ~57MB on 256GB cards)\n");
 	    break;
 #endif

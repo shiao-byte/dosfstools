@@ -161,7 +161,7 @@ void read_fat(DOS_FS * fs)
 #if defined(FAT_LAZY_LOAD) || defined(CLUSTER_OWNER_BITMAP)
     if (total_num_clusters <= FSCK_CLUSTER_OPTIMIZE_THRESHOLD) {
 # ifdef FAT_LAZY_LOAD
-	if (fs->fat_lazy_enable) {
+	if (FAT_LAZY_ENABLE_AUTO == fs->fat_lazy_enable) {
 	    printf("Note: total clusters %u <= %u — ignoring -L, using full FAT.\n",
 		   (unsigned)total_num_clusters,
 		   (unsigned)FSCK_CLUSTER_OPTIMIZE_THRESHOLD);
@@ -169,7 +169,7 @@ void read_fat(DOS_FS * fs)
 	}
 # endif
 # ifdef CLUSTER_OWNER_BITMAP
-	if (fs->cluster_owner_mode == 1) {
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	    printf("Note: total clusters %u <= %u — ignoring -B, using pointer cluster_owner.\n",
 		   (unsigned)total_num_clusters,
 		   (unsigned)FSCK_CLUSTER_OPTIMIZE_THRESHOLD);
@@ -194,7 +194,7 @@ void read_fat(DOS_FS * fs)
      * - fat_lazy_enable == 1（-L）: 仅当 fat_bits==32 且簇数 > CLUSTER_MAX 时启用窗口
      * fs->fat 只保留单个 CLUSTER_MAX 大小的滑动窗口，按需换入。
      */
-    if (fs->fat_lazy_enable == 1 && fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
+    if (FAT_LAZY_ENABLE_AUTO == fs->fat_lazy_enable && fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
 	uint32_t seg, cnt;
 	void *seg_buf = NULL;
 	int differ = 0;
@@ -317,7 +317,7 @@ void read_fat(DOS_FS * fs)
 	       total_num_clusters, alloc_size);
 
 #ifdef CLUSTER_OWNER_BITMAP
-	if (fs->cluster_owner_mode == 1) {
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	    /* Bitmap mode: 1 bit per cluster */
 	    size_t bitmap_bytes = (total_num_clusters + 7) / 8;
 	    fs->cluster_bitmap = alloc(bitmap_bytes);
@@ -412,7 +412,7 @@ void read_fat(DOS_FS * fs)
 #endif
 
 #ifdef CLUSTER_OWNER_BITMAP
-    if (fs->cluster_owner_mode == 1) {
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	/* Bitmap mode: 1 bit per cluster */
 	size_t bitmap_bytes = (total_num_clusters + 7) / 8;
 	fs->cluster_bitmap = alloc(bitmap_bytes);
@@ -585,7 +585,7 @@ off_t cluster_start(DOS_FS * fs, uint32_t cluster)
 void set_owner(DOS_FS * fs, uint32_t cluster, DOS_FILE * owner)
 {
 #ifdef CLUSTER_OWNER_BITMAP
-    if (fs->cluster_owner_mode == 1) {
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	/* Bitmap mode: 1 bit per cluster */
 	if (fs->cluster_bitmap == NULL)
 	    die("Internal error: attempt to set owner in non-existent bitmap");
@@ -616,7 +616,7 @@ void set_owner(DOS_FS * fs, uint32_t cluster, DOS_FILE * owner)
 DOS_FILE *get_owner(DOS_FS * fs, uint32_t cluster)
 {
 #ifdef CLUSTER_OWNER_BITMAP
-    if (fs->cluster_owner_mode == 1) {
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	/* Bitmap mode: can only return "used" or "free" */
 	if (fs->cluster_bitmap == NULL)
 	    return NULL;
@@ -768,7 +768,7 @@ void reclaim_file(DOS_FS * fs)
     num_refs = alloc(total_num_clusters * sizeof(uint32_t));
     memset(num_refs, 0, (total_num_clusters * sizeof(uint32_t)));
 #ifdef CLUSTER_OWNER_BITMAP
-    if (fs->cluster_owner_mode == 1) {
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 	was_orphan = alloc((total_num_clusters + 7) / 8);
 	memset(was_orphan, 0, (total_num_clusters + 7) / 8);
     }
@@ -791,7 +791,7 @@ void reclaim_file(DOS_FS * fs)
 	 * non-bad value are still orphans and must be captured here so that
 	 * is_orphan_head detection works correctly after tag_free().
 	 */
-	if (fs->cluster_owner_mode == 1 &&
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode &&
 	    !get_owner(fs, i) && next && !FAT_IS_BAD(fs, next))
 	    WAS_ORPHAN_SET(i);
 #endif
@@ -824,7 +824,7 @@ void reclaim_file(DOS_FS * fs)
 		get_fat(&curEntry, fs->fat, i, fs);
 
 #ifdef CLUSTER_OWNER_BITMAP
-		if (fs->cluster_owner_mode == 1) {
+		if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 		if (curEntry.value && !FAT_IS_BAD(fs, curEntry.value) &&
 		!get_owner(fs, i) && curEntry.value < total_num_clusters) {
 		    if (!num_refs[curEntry.value]--)
@@ -888,7 +888,7 @@ void reclaim_file(DOS_FS * fs)
 	 *   (c) no other orphan cluster points to it (num_refs[i] == 0, head)
 	 */
 	int is_orphan_head = 0;
-	if (fs->cluster_owner_mode == 1) {
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
 		is_orphan_head = (WAS_ORPHAN_GET(i) && get_owner(fs, i) && !num_refs[i]);
 	}
 	else {
@@ -921,7 +921,7 @@ void reclaim_file(DOS_FS * fs)
 
     free(num_refs);
 #ifdef CLUSTER_OWNER_BITMAP
-	if (fs->cluster_owner_mode == 1) {
+	if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode) {
     if (was_orphan)
 	free(was_orphan);
   }
