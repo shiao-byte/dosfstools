@@ -16,14 +16,14 @@ echo "cleaning thirdlib for ${CHIP}..."
 #####################
 ### clean libiconv
 #####################
-cd $pwd/libiconv
-./sk_clean.sh
+# cd $pwd/libiconv
+# ./sk_clean.sh
 
-#####################
-### clean dosfstools
-#####################
-cd $pwd/dosfstools
-./sk_clean.sh
+# #####################
+# ### clean dosfstools
+# #####################
+# cd $pwd/dosfstools
+# ./sk_clean.sh
 
 #############################################################################################################
 ### Clean output

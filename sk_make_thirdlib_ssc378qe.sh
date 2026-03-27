@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 #############################################################################################################
 ### Set global Env
@@ -10,13 +11,11 @@ CHIP=ssc378qe
 
 if [ ! -f setenv_${CHIP}.sh ];then
 	echo "setenv_${CHIP}.sh not exist"
-	exit 0
+	exit 1
 fi
 
-sh setenv_${CHIP}.sh;
-export PATH="/opt/mstar/arm-sigmastar-linux-uclibcgnueabihf-9.1.0/bin:":$PATH
-export CROSS_PREFIX=arm-sigmastar-linux-uclibcgnueabihf-9.1.0
-export CFLAGS="-mcpu=cortex-a7 "
+. setenv_${CHIP}.sh;
+export HOST_TRIPLET=arm-linux-gnueabihf
 export OUT_NAME=thridlib_out
 export OUT_PATH=$(pwd)/${OUT_NAME}
 echo "!!!!!!!!!!!!!!!!!!!!!"

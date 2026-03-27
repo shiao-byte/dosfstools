@@ -8,8 +8,8 @@ rm -rf libiconv-1.16
 
 tar -zxvf libiconv-1.16.tar.gz
 cd libiconv-1.16
-./configure --host=${CROSS_PREFIX} --enable-shared --enable-static
-make CROSS_COMPILE=${CROSS_PREFIX}- ARCH=arm
+./configure --host=${HOST_TRIPLET} --enable-shared --enable-static
+make ARCH=arm
 
 
 
