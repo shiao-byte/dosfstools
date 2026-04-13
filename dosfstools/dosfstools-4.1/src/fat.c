@@ -362,52 +362,160 @@ void read_fat(DOS_FS * fs)
 	    alloc_size = (total_num_clusters * 12 + 23) / 24 * 3;
     printf("total_num_clusters:%d, alloc_size:%d\n", total_num_clusters, alloc_size);
     
-    first = alloc(alloc_size);
-    fs_read(fs->fat_start, eff_size, first);
-    if (fs->nfats > 1) {
-	second = alloc(alloc_size);
-	fs_read(fs->fat_start + fs->fat_size, eff_size, second);
-    }
-    if (second && memcmp(first, second, eff_size) != 0) {
+#ifdef CLUSTER_OWNER_BITMAP
+    if (CLUSTER_OWNER_BITMAP_MODE == fs->cluster_owner_mode &&
+	fs->fat_bits == 32 && total_num_clusters > (uint32_t)CLUSTER_MAX) {
+	/*
+	 * 位图模式下分段双FAT比较：
+	 * 每次仅加载 CLUSTER_MAX 个簇的两份拷贝（各 ~7.6 MB），
+	 * 相比同时加载两张完整FAT（~62 MB）峰值内存减半。
+	 * 分段比较/修复完成后再全量加载 FAT1 供后续修复使用（~30.5 MB）。
+	 */
+	uint32_t seg, cnt;
+	void *seg1, *seg2 = NULL;
+	int seg_alloc = CLUSTER_MAX * 4;
+	int differ = 0;
 	FAT_ENTRY first_media, second_media;
-	get_fat(&first_media, first, 0, fs);
-	get_fat(&second_media, second, 0, fs);
-	first_ok = (first_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
-	second_ok = (second_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
-	if (first_ok && !second_ok) {
-	    printf("FATs differ - using first FAT.\n");
-	    fs_write(fs->fat_start + fs->fat_size, eff_size, first);
-	}
-	if (!first_ok && second_ok) {
-	    printf("FATs differ - using second FAT.\n");
-	    fs_write(fs->fat_start, eff_size, second);
-	    memcpy(first, second, eff_size);
-	}
-	if (first_ok && second_ok) {
-	    if (interactive) {
-		printf("FATs differ but appear to be intact. Use which FAT ?\n"
-		       "1) Use first FAT\n2) Use second FAT\n");
-		if (get_key("12", "?") == '1') {
-		    fs_write(fs->fat_start + fs->fat_size, eff_size, first);
-		} else {
-		    fs_write(fs->fat_start, eff_size, second);
-		    memcpy(first, second, eff_size);
+
+	printf("Bitmap mode: segmented dual-FAT comparison (clusters=%u, seg=%d)\n",
+	       total_num_clusters, CLUSTER_MAX);
+
+	seg1 = alloc(seg_alloc);
+	first_ok = second_ok = 1;
+
+	if (fs->nfats > 1) {
+	    seg2 = alloc(seg_alloc);
+
+	    /* 分段比较双 FAT */
+	    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+		cnt = total_num_clusters - seg;
+		if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+		fs_read(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg1);
+		fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg2);
+		if (seg == 0) {
+		    get_fat(&first_media, seg1, 0, fs);
+		    get_fat(&second_media, seg2, 0, fs);
+		    first_ok = (first_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
+		    second_ok = (second_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
 		}
-	    } else {
-		printf("FATs differ but appear to be intact. Using first "
-		       "FAT.\n");
+		if (memcmp(seg1, seg2, cnt * 4) != 0) differ = 1;
+	    }
+
+	    /* 处理双 FAT 差异：分段写入修复，始终保持 FAT1 为最终正确拷贝 */
+	    if (differ) {
+		if (first_ok && !second_ok) {
+		    printf("FATs differ - using first FAT.\n");
+		    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			cnt = total_num_clusters - seg;
+			if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			fs_read(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg1);
+			fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg1);
+		    }
+		}
+		if (!first_ok && second_ok) {
+		    printf("FATs differ - using second FAT.\n");
+		    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			cnt = total_num_clusters - seg;
+			if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg2);
+			/* 将 FAT2 内容写入 FAT1，使后续全量加载 FAT1 即得正确数据 */
+			fs_write(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg2);
+		    }
+		}
+		if (first_ok && second_ok) {
+		    if (interactive) {
+			printf("FATs differ but appear to be intact. Use which FAT ?\n"
+			       "1) Use first FAT\n2) Use second FAT\n");
+			if (get_key("12", "?") == '1') {
+			    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+				cnt = total_num_clusters - seg;
+				if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+				fs_read(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg1);
+				fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg1);
+			    }
+			} else {
+			    for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+				cnt = total_num_clusters - seg;
+				if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+				fs_read(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg2);
+				fs_write(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg2);
+			    }
+			}
+		    } else {
+			printf("FATs differ but appear to be intact. Using first FAT.\n");
+			for (seg = 0; seg < total_num_clusters; seg += CLUSTER_MAX) {
+			    cnt = total_num_clusters - seg;
+			    if (cnt > (uint32_t)CLUSTER_MAX) cnt = CLUSTER_MAX;
+			    fs_read(fs->fat_start + (off_t)seg * 4, (int)(cnt * 4), seg1);
+			    fs_write(fs->fat_start + fs->fat_size + (off_t)seg * 4, (int)(cnt * 4), seg1);
+			}
+		    }
+		}
+		if (!first_ok && !second_ok) {
+		    free(seg1);
+		    free(seg2);
+		    printf("Both FATs appear to be corrupt. Giving up.\n");
+		    exit(1);
+		}
+	    }
+	    free(seg2);
+	}
+
+	/* 分段比较/修复完成，全量加载 FAT1 供后续簇链修复使用 */
+	free(seg1);
+	first = alloc(alloc_size);
+	fs_read(fs->fat_start, eff_size, first);
+	fs->fat = (unsigned char *)first;
+    } else
+#endif  /* CLUSTER_OWNER_BITMAP */
+    {
+	first = alloc(alloc_size);
+	fs_read(fs->fat_start, eff_size, first);
+	if (fs->nfats > 1) {
+	    second = alloc(alloc_size);
+	    fs_read(fs->fat_start + fs->fat_size, eff_size, second);
+	}
+	if (second && memcmp(first, second, eff_size) != 0) {
+	    FAT_ENTRY first_media, second_media;
+	    get_fat(&first_media, first, 0, fs);
+	    get_fat(&second_media, second, 0, fs);
+	    first_ok = (first_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
+	    second_ok = (second_media.value & FAT_EXTD(fs)) == FAT_EXTD(fs);
+	    if (first_ok && !second_ok) {
+		printf("FATs differ - using first FAT.\n");
 		fs_write(fs->fat_start + fs->fat_size, eff_size, first);
 	    }
+	    if (!first_ok && second_ok) {
+		printf("FATs differ - using second FAT.\n");
+		fs_write(fs->fat_start, eff_size, second);
+		memcpy(first, second, eff_size);
+	    }
+	    if (first_ok && second_ok) {
+		if (interactive) {
+		    printf("FATs differ but appear to be intact. Use which FAT ?\n"
+			   "1) Use first FAT\n2) Use second FAT\n");
+		    if (get_key("12", "?") == '1') {
+			fs_write(fs->fat_start + fs->fat_size, eff_size, first);
+		    } else {
+			fs_write(fs->fat_start, eff_size, second);
+			memcpy(first, second, eff_size);
+		    }
+		} else {
+		    printf("FATs differ but appear to be intact. Using first "
+			   "FAT.\n");
+		    fs_write(fs->fat_start + fs->fat_size, eff_size, first);
+		}
+	    }
+	    if (!first_ok && !second_ok) {
+		printf("Both FATs appear to be corrupt. Giving up.\n");
+		exit(1);
+	    }
 	}
-	if (!first_ok && !second_ok) {
-	    printf("Both FATs appear to be corrupt. Giving up.\n");
-	    exit(1);
+	if (second) {
+	    free(second);
 	}
+	fs->fat = (unsigned char *)first;
     }
-    if (second) {
-	free(second);
-    }
-    fs->fat = (unsigned char *)first;
 #ifdef FAT_LAZY_LOAD
     fs->fat_lazy = 0;
 #endif
