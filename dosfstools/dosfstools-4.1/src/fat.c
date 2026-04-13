@@ -50,6 +50,7 @@
 
 static int read_fat_mode = 0;
 
+
 /**
  * Fetch the FAT entry for a specified cluster.
  *
@@ -877,7 +878,7 @@ void reclaim_file(DOS_FS * fs)
 	while (changed);
 
 	/* Now we can start recovery */
-	files = reclaimed = 0;
+    files = reclaimed = 0;
     for (i = 2; i < total_num_clusters; i++) {
 #ifdef CLUSTER_OWNER_BITMAP
 	/* Bitmap mode: get_owner() returns (DOS_FILE*)1 for ANY owned cluster,

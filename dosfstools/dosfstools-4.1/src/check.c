@@ -1158,12 +1158,77 @@ static void add_file(DOS_FS * fs, DOS_FILE *** chain, DOS_FILE * parent,
 	strncmp((const char *)de.name, MSDOS_DOT, MSDOS_NAME) != 0 &&
 	strncmp((const char *)de.name, MSDOS_DOTDOT, MSDOS_NAME) != 0)
 	++n_files;
-    DEBUG_PRINT("[DEBUG] add_file: calling test_file()\n");
-    test_file(fs, new, test);	/* Bad cluster check */
-    DEBUG_PRINT("[DEBUG] add_file: test_file() returned\n");
+#ifdef FAT_LAZY_LOAD
+    /* 懒加载激活时 test_file 延迟到 scan_dir/scan_root 按簇排序后批量调用；
+     * 普通路径仍在此处逐文件调用，与原始逻辑完全一致。*/
+    if (!fs->fat_lazy)
+#endif
+	test_file(fs, new, test);	/* Bad cluster check */
 }
 
 static int subdirs(DOS_FS * fs, DOS_FILE * parent, FDSC ** cp);
+
+#ifdef FAT_LAZY_LOAD
+/* -----------------------------------------------------------------------
+ * sort_dir_by_fstart - 将目录链表按文件起始簇升序重排
+ *
+ * 目的：在 FAT lazy-load 模式（-L）下，fsck 按目录条目顺序遍历时，
+ *       相邻文件可能交替落在不同 FAT 窗口（如视频在 win0、图像在 win1），
+ *       导致每个文件都触发一次 14.9MB 的窗口换入，窗口切换次数 ≈ 2N。
+ *       按起始簇排序后，同一窗口的文件连续处理，切换次数降至 ≈ 2（固定）。
+ *
+ * 实现：将链表节点收集到临时数组，qsort_r 排序后重建 next 链。
+ *       只重链 next 指针，节点内存、parent/first/dir_ent 字段全部不变。
+ * ----------------------------------------------------------------------- */
+static int cmp_fstart(const void *a, const void *b, void *ctx)
+{
+    DOS_FS *fs = (DOS_FS *)ctx;
+    DOS_FILE *fa = *(DOS_FILE **)a;
+    DOS_FILE *fb = *(DOS_FILE **)b;
+    uint32_t sa = FSTART(fa, fs);
+    uint32_t sb = FSTART(fb, fs);
+    if (sa < sb) return -1;
+    if (sa > sb) return  1;
+    return 0;
+}
+
+static void sort_dir_by_fstart(DOS_FS *fs, DOS_FILE **head)
+{
+    DOS_FILE *walk;
+    DOS_FILE **arr;
+    int n, i;
+
+    if (!head || !*head)
+        return;
+
+    /* 统计节点数 */
+    n = 0;
+    for (walk = *head; walk; walk = walk->next)
+        n++;
+    if (n <= 1)
+        return;
+
+    /* 收集指针到临时数组 */
+    arr = malloc(n * sizeof(DOS_FILE *));
+    if (!arr)
+        return;   /* 内存不足时跳过排序，不影响正确性 */
+
+    i = 0;
+    for (walk = *head; walk; walk = walk->next)
+        arr[i++] = walk;
+
+    /* 按起始簇升序排列（FSTART=0 的空文件/目录排最前，不影响功能） */
+    qsort_r(arr, (size_t)n, sizeof(DOS_FILE *), cmp_fstart, fs);
+
+    /* 重建单向链表 */
+    for (i = 0; i < n - 1; i++)
+        arr[i]->next = arr[i + 1];
+    arr[n - 1]->next = NULL;
+    *head = arr[0];
+
+    free(arr);
+}
+#endif /* FAT_LAZY_LOAD */
 
 static int scan_dir(DOS_FS * fs, DOS_FILE * this, FDSC ** cp)
 {
@@ -1191,7 +1256,15 @@ static int scan_dir(DOS_FS * fs, DOS_FILE * this, FDSC ** cp)
     DEBUG_PRINT("[DEBUG] scan_dir: lfn_check done, calling check_dir()\n");
     if (check_dir(fs, &this->first, this->offset))
 	return 0;
-    DEBUG_PRINT("[DEBUG] scan_dir: check_dir done, calling check_files()\n");
+    DEBUG_PRINT("[DEBUG] scan_dir: check_dir done\n");
+#ifdef FAT_LAZY_LOAD
+    /* 仅懒加载激活时：按起始簇升序重排后批量调用 test_file，减少 FAT 窗口切换次数 */
+    if (fs->fat_lazy) {
+	sort_dir_by_fstart(fs, &this->first);
+	{ DOS_FILE *w; for (w = this->first; w; w = w->next) test_file(fs, w, test); }
+    }
+#endif
+    DEBUG_PRINT("[DEBUG] scan_dir: calling check_files()\n");
     if (check_files(fs, this->first))
 	return 1;
     DEBUG_PRINT("[DEBUG] scan_dir: check_files done, calling subdirs()\n");
@@ -1254,7 +1327,15 @@ int scan_root(DOS_FS * fs)
     lfn_check_orphaned();
     DEBUG_PRINT("[DEBUG] about to check_dir(root)\n");
     (void)check_dir(fs, &root, 0);
-    DEBUG_PRINT("[DEBUG] check_dir completed, checking files\n");
+    DEBUG_PRINT("[DEBUG] check_dir completed\n");
+#ifdef FAT_LAZY_LOAD
+    /* 仅懒加载激活时：按起始簇升序重排后批量调用 test_file，减少 FAT 窗口切换次数 */
+    if (fs->fat_lazy) {
+	sort_dir_by_fstart(fs, &root);
+	{ DOS_FILE *w; for (w = root; w; w = w->next) test_file(fs, w, test); }
+    }
+#endif
+    DEBUG_PRINT("[DEBUG] checking files\n");
     if (check_files(fs, root))
 	return 1;
     DEBUG_PRINT("[DEBUG] about to scan subdirs\n");
