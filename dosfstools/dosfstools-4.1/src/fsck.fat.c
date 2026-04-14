@@ -219,6 +219,18 @@ int main(int argc, char **argv)
 	qfree(&mem_queue);
     if (test)
 	fix_bad(&fs);
+#ifdef CLUSTER_OWNER_BITMAP
+    /* 大容量卡(-B 位图模式生效)下自动关闭孤儿链文件保存：
+     * 摄像机场景中断电产生的孤儿链（视频/图像/日志片段）恢复意义有限，
+     * 直接释放可避免 SD 卡积累大量无用 FSCK####REC 文件。
+     * 小卡(-B 被自动降级为普通模式)保持原有 salvage_files 行为不变。
+     */
+    if (CLUSTER_OWNER_BITMAP_MODE == fs.cluster_owner_mode && salvage_files) {
+	printf("Note: bitmap mode (large card) - releasing orphan chains directly"
+	       " (no FSCK####REC files).\n");
+	salvage_files = 0;
+    }
+#endif
     if (salvage_files)
 	reclaim_file(&fs);
     else
